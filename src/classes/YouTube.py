@@ -219,76 +219,74 @@ class YouTube:
 
         return self.metadata
     
-    def generate_prompts(self) -> List[str]:
+    def generate_prompts(self, n_prompts: int = 10) -> List[str]:
         """
         Generates AI Image Prompts based on the provided Video Script.
+
+        Args:
+            n_prompts (int): Number of prompts to generate. Defaults to 10.
 
         Returns:
             image_prompts (List[str]): Generated List of image prompts.
         """
-        n_prompts = len(self.script) / 3
-
         prompt = f"""
-        Generate {n_prompts} Image Prompts for AI Image Generation,
-        depending on the subject of a video.
-        Subject: {self.subject}
-
-        The image prompts are to be returned as
-        a JSON-Array of strings.
-
-        Each search term should consist of a full sentence,
-        always add the main subject of the video.
-
-        Be emotional and use interesting adjectives to make the
-        Image Prompt as detailed as possible.
-        
-        YOU MUST ONLY RETURN THE JSON-ARRAY OF STRINGS.
-        YOU MUST NOT RETURN ANYTHING ELSE. 
-        YOU MUST NOT RETURN THE SCRIPT.
-        
-        The search terms must be related to the subject of the video.
-        Here is an example of a JSON-Array of strings:
-        ["image prompt 1", "image prompt 2", "image prompt 3"]
+        Based on the provided text, generate {n_prompts} unique and creative image prompts.
+        Return ONLY a JSON array of strings, each string being an image prompt.
+        Example format:
+        ["prompt 1", "prompt 2", "prompt 3"]
 
         For context, here is the full text:
         {self.script}
         """
 
-        completion = str(self.generate_response(prompt, model=parse_model(get_image_prompt_llm())))\
-            .replace("```json", "") \
-            .replace("```", "")
+        completion = str(self.generate_response(prompt, model=parse_model(get_image_prompt_llm())))
 
-        image_prompts = []
-
-        if "image_prompts" in completion:
-            image_prompts = json.loads(completion)["image_prompts"]
-        else:
+        # Clean up the response
+        completion = completion.replace("```json", "").replace("```", "").strip()
+        
+        try:
+            # Try to parse as direct JSON array
+            image_prompts = json.loads(completion)
+            if get_verbose():
+                info(f" => Generated Image Prompts: {image_prompts}")
+        except json.JSONDecodeError:
+            if get_verbose():
+                warning("GPT returned an unformatted response. Attempting to clean...")
+            
             try:
-                image_prompts = json.loads(completion)
-                if get_verbose():
-                    info(f" => Generated Image Prompts: {image_prompts}")
+                # Try to extract array from response using regex
+                r = re.compile(r'\[(.*?)\]', re.DOTALL)
+                matches = r.findall(completion)
+                if matches:
+                    # Take the first match and try to parse it as a JSON array
+                    array_str = f"[{matches[0]}]"
+                    image_prompts = json.loads(array_str)
+                else:
+                    # If no array found, split by newlines and clean up
+                    lines = completion.split('\n')
+                    image_prompts = [line.strip().strip('"\'').strip(',') for line in lines if line.strip()]
             except Exception:
                 if get_verbose():
-                    warning("GPT returned an unformatted response. Attempting to clean...")
+                    warning("Failed to generate Image Prompts. Retrying...")
+                return self.generate_prompts(n_prompts)
 
-                # Get everything between [ and ], and turn it into a list
-                r = re.compile(r"\[.*\]")
-                image_prompts = r.findall(completion)
-                if len(image_prompts) == 0:
-                    if get_verbose():
-                        warning("Failed to generate Image Prompts. Retrying...")
-                    return self.generate_prompts()
+        # Ensure we have a list
+        if not isinstance(image_prompts, list):
+            if get_verbose():
+                warning("Generated prompts are not in list format. Retrying...")
+            return self.generate_prompts(n_prompts)
 
-        self.image_prompts = image_prompts
+        # Clean up the prompts
+        image_prompts = [str(p).strip().strip('"\'') for p in image_prompts if p]
+        image_prompts = [p for p in image_prompts if p]  # Remove empty prompts
 
-        # Check the amount of image prompts
-        # and remove if it's more than needed
-        if len(image_prompts) > n_prompts:
-            image_prompts = image_prompts[:n_prompts]
+        # Store the prompts
+        self.image_prompts = image_prompts[:n_prompts]
 
-        success(f"Generated {len(image_prompts)} Image Prompts.")
+        if get_verbose():
+            success(f"Generated {len(self.image_prompts)} Image Prompts.")
 
-        return image_prompts
+        return self.image_prompts
 
     def generate_image(self, prompt: str) -> str:
         """
